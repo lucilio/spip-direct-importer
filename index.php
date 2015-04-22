@@ -29,7 +29,7 @@ class SpipMediaImporter
 
 	function __get( $property ){
 		if( $property == 'options' ){
-			return get_option( 'spip_media_import', array() );
+			return get_option( 'spip_import', array() );
 		}
 		elseif( $property == 'connection' ){
 			$link = NULL;
@@ -44,6 +44,12 @@ class SpipMediaImporter
 				if( !mysql_select_db( $this->options['connection']['database'], $link ) ){
 					$link = FALSE;
 				}
+				$options['imported_setup'] = array();
+				$results = mysql_query( "SELECT * FROM spip_meta;" );
+				while( $row = mysql_fetch_assoc( $results ) ){
+					$options['imported_setup'][ $row['nom'] ] = $row['valeur'];
+				}
+				update_option( 'spip_import', $options );
 			}
 			else{
 				?>
@@ -52,12 +58,6 @@ class SpipMediaImporter
 				</div>
 				<?php
 			}
-			$options['imported_setup'] = array();
-			$results = mysql_query( "SELECT * FROM spip_meta;" );
-			while( $row = mysql_fetch_assoc( $results ) ){
-				$options['imported_setup'][ $row['nom'] ] = $row['valeur'];
-			}
-			update_option( 'spip_media_import', $options );
 			return $link;
 		}
 		else{
@@ -75,7 +75,7 @@ class SpipMediaImporter
 		;
 		register_setting(
 			'media',
-			'spip_media_import',
+			'spip_import',
 			array( $this, 'media_import_options_check' )
 			)
 		;
@@ -172,10 +172,18 @@ class SpipMediaImporter
 		<?php
 		while( $results and $row = mysql_fetch_assoc( $results ) ){
 			extract( $row );
-			?>			
-				<dt><?php echo ( empty( $display_name ) ? $user_login : $display_name ) ?></dt>
-				<dd><strong>username: </strong><?php echo $user_login ?></dd>
-				<dd><strong>email: </strong><?php echo $user_email ?></dd>
+			if( $this->get_import_status( 'user', $user_login ) ){
+				die( 'X__x' );
+			}
+			?>
+			<dt>
+				<label for="spip_import_<?php echo $user_login; ?>">
+				<?php echo ( empty( $display_name ) ? $user_login : $display_name ) ?>
+					<input id="spip_import_<?php echo $user_login; ?>" type="checkbox" name="spip_import[user][<?php echo $user_login; ?>]" title="Import <?php echo $user_login; ?>" >
+				</label>
+			</dt>
+			<dd><strong>username: </strong><?php echo $user_login ?></dd>
+			<dd><strong>email: </strong><?php echo $user_email ?></dd>
 			<?php
 		}
 		?>
@@ -241,6 +249,7 @@ class SpipMediaImporter
 						<em><strong><?php echo $post_author; ?></strong></em>
 						[<?php echo $spip_id ?>]
 					</p>
+					<p><em><?php echo implode( '</em> <strong>-&gt;</strong> <em>' , $this->get_category_chain() ) ?></em></p>
 					<hr>
 				</li>
 				<?php
@@ -279,20 +288,18 @@ class SpipMediaImporter
 	function media_import_options_check( $input ){
 		if( !isset( $input['connection']['reset'] ) ){
 			if( empty( $input['connection']['host'] ) ){
-				add_settings_error( 'spip_media_import', 'connection-host', __('Please set the server host'), 'error' );
+				add_settings_error( 'spip_import', 'connection-host', __('Please set the server host'), 'error' );
 			}
 			if( empty( $input['connection']['username'] ) ){
-				add_settings_error( 'spip_media_import', 'connection-username', __('You must set a username'), 'error' );
+				add_settings_error( 'spip_import', 'connection-username', __('You must set a username'), 'error' );
 			}
 			if( empty( $input['connection']['password'] ) ){
-				add_settings_error( 'spip_media_import', 'connection-password', __('Password can not be empty'), 'error' );
+				add_settings_error( 'spip_import', 'connection-password', __('Password can not be empty'), 'error' );
 			}
 			$input['connection']['reset'] = FALSE;
 		}
 		elseif( $input['connection']['reset'] ){
-			$options = $this->options;
-			$options['connection'] = NULL;
-			update_option( 'spip_media_import', $options );
+			$this->reset_connection();
 		}
 		return $input;
 	}
@@ -300,35 +307,35 @@ class SpipMediaImporter
 	function media_import_connection_host(){
 		$host = ( isset( $this->options['connection'] ) and isset( $this->options['connection']['host'] ) ) ? $this->options['connection']['host'] : NULL;
 		?>
-		<input type="text" id="media_import_connection_host" name="spip_media_import[connection][host]"<?php if( isset( $host ) ) echo " value=\"$host\""; ?>>
+		<input type="text" id="media_import_connection_host" name="spip_import[connection][host]"<?php if( isset( $host ) ) echo " value=\"$host\""; ?>>
 		<?php
 	}
 
 	function media_import_connection_database(){
 		$database = ( isset( $this->options['connection'] ) and isset( $this->options['connection']['database'] ) ) ? $this->options['connection']['database'] : NULL;
 		?>
-		<input type="text" id="media_import_connection_database" name="spip_media_import[connection][database]"<?php echo ( $database ? " value=\"$database\"" : "" ); ?>>
+		<input type="text" id="media_import_connection_database" name="spip_import[connection][database]"<?php echo ( $database ? " value=\"$database\"" : "" ); ?>>
 		<?php
 	}
 
 	function media_import_connection_username(){
 		$username = ( isset( $this->options['connection'] ) and isset( $this->options['connection']['username'] ) ) ? $this->options['connection']['username'] : NULL;
 		?>
-		<input type="text" id="media_import_connection_username" name="spip_media_import[connection][username]"<?php echo ( $username ? " value=\"$username\"" : "" ); ?>>
+		<input type="text" id="media_import_connection_username" name="spip_import[connection][username]"<?php echo ( $username ? " value=\"$username\"" : "" ); ?>>
 		<?php
 	}
 
 	function media_import_connection_password(){
 		$password = ( isset( $this->options['connection'] ) and isset( $this->options['connection']['password'] ) ) ? $this->options['connection']['password'] : NULL;
 		?>
-		<input type="password" id="media_import_connection_password" name="spip_media_import[connection][password]"<?php echo ( $password ? " value=\"$password\"" : "" ); ?>>
+		<input type="password" id="media_import_connection_password" name="spip_import[connection][password]"<?php echo ( $password ? " value=\"$password\"" : "" ); ?>>
 		<?php
 	}
 
 	function media_import_connection_reset(){
 		$reset = ( isset( $this->options['connection'] ) and isset( $this->options['connection']['reset'] ) and $this->options['connection']['reset'] );
 		?>
-		<input type="checkbox" id="media_import_connection_reset" name="spip_media_import[connection][reset]"<?php echo ( $reset ? " checked" : "" ); ?>>
+		<input type="checkbox" id="media_import_connection_reset" name="spip_import[connection][reset]"<?php echo ( $reset ? " checked" : "" ); ?>>
 		<?php
 	}
 
@@ -458,8 +465,36 @@ class SpipMediaImporter
 
 	}
 
-	function get_categories( $id_article ){
+	function get_categories_table(){
+		$results = $this->query("SELECT id_rubrique AS spip_id, BINARY titre AS category, (SELECT BINARY titre FROM spip_rubriques AS spip_parent_rubriques WHERE spip_parent_rubriques.id_rubrique = spip_rubriques.id_parent) AS parent FROM spip_rubriques;");
+		$categories = array();
+		while( $row = mysql_fetch_assoc( $results ) ){
+			$categories[ $row['spip_id'] ] = array( 'category' => $row['category'], 'parent' => $row['parent'] );
+		}
+		return $categores;
+	}
 
+	function get_category_chain( $id_category ){
+		$categories_table = $this->get_categories_table();
+		$category = isset( $categories_table[ $id_category ] ) ? $categories_table[ $id_category ] : array();
+		$category_chain = array( $category['category'] );
+		while( array_key_exists( 'parent' , $category ) ){
+			$category = $category['parent'];
+			$category_chain[] = $category['category'];
+		}
+		return $category_chain;
+	}
+
+	function get_import_status( $object = NULL, $id = NULL ){
+		if( array_key_exists( 'spip_import' , $_POST ) ){
+			die( var_export( $_POST['spip_import'] ) );
+		}
+	}
+
+	function reset_connection(){
+		$options = $this->options;
+		$options['connection'] = NULL;
+		update_option( 'spip_import', $options );
 	}
 
 	function media_tag( $media_tag ){
@@ -467,5 +502,5 @@ class SpipMediaImporter
 	}
 
 }
-$spip_media_importer = new SpipMediaImporter();
+$spip_importer = new SpipMediaImporter();
 ?>
