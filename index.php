@@ -250,7 +250,7 @@ class SpipMediaImporter
 	}
 
 	function spip_import_posts(){
-		$results = $this->query( "SELECT id_article AS spip_id, BINARY titre AS post_title, BINARY texte AS post_content, statut AS post_status, date AS post_date, id_rubrique AS category FROM spip_articles;" );
+		$results = $this->query( "SELECT id_article AS spip_id, BINARY titre AS post_title, CONCAT(BINARY surtitre, \"\n\",BINARY descriptif,\"\n\",BINARY soustitre) AS post_excerpt, CONCAT(BINARY chapo, \"\n\",BINARY texte,\"\n\",BINARY ps) AS post_content, statut AS post_status, date AS post_date, id_rubrique AS category FROM spip_articles;" );
 		?>
 		<ul>
 			<?php
