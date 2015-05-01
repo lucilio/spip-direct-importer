@@ -53,14 +53,27 @@ class SpipMediaImporter
 			$options = $this->options;
 			if( function_exists('mysql_connect') ){
 				$link = mysql_connect( $options['connection']['host'], $options['connection']['username'], $options['connection']['password'] );
-				if( $link and  mysql_select_db( $options['connection']['database'], $link ) ){
-					return $link;
+				if( !( $connection_error = mysql_errno() ) ){
+					mysql_select_db( $options['connection']['database'], $link );
+					if( !( $connection_error = mysql_errno() ) ){
+						return $link;
+					}
+					else{
+						add_settings_error( 'spip_import', 'connection-host', __("Can't connect to database: ") . mysql_error(), 'error' );
+					}
 				}
+				else{
+					//*DEBUG*/		die( __('Connection failure') . var_export( compact( 'options' ) ) . mysql_error() );
+					add_settings_error( 'spip_import', 'connection-host', __("Can't connect to mysql: ") . mysql_error(), 'error' );
+				}
+			}
+			else{
+				add_settings_error( 'spip_import', 'connection-host', __("MySQL library not found."), 'error' );
 			}
 			return FALSE;
 		}
 		else{
-			/*DEBUG*/die('erro grave: ' . compact('property'));
+			/*DEBUG*/die('erro grave: ' . var_export( compact('property') ) );
 		}
 	}
 
@@ -131,7 +144,7 @@ class SpipMediaImporter
 			;
 			add_settings_field(
 				'database_users',
-				__('Import this Users'),
+				__('Import this users'),
 				array( $this, 'spip_import_users' ),
 				'media',
 				'spip_import_connection_section'
@@ -146,7 +159,7 @@ class SpipMediaImporter
 				)
 			;
 			add_settings_field(
-				'database_tags',
+				'database_categories',
 				__('Import this categories'),
 				array( $this, 'spip_import_categories' ),
 				'media',
@@ -175,7 +188,7 @@ class SpipMediaImporter
 	function spip_import_do_importing(){
 		?>
 		<label>
-			<input type="checkbox" id="spip_import_do_importing" name="spip_import[do_importing][import_all]">
+			<input type="checkbox" id="spip_import_do_importing" name="spip_import[do_importing][import__all]">
 			<strong><?php echo __('Import Everything'); ?></strong>
 		</label>
 		<?php
@@ -186,30 +199,49 @@ class SpipMediaImporter
 		$results = $this->query( "SELECT BINARY login AS user_login, BINARY nom AS display_name, BINARY email AS user_email FROM spip_auteurs;" );
 		?>
 		<label>
-			<input type="checkbox" id="spip_import_user_import__all" name="spip_import[do_importing][user][import__all]"<?php echo ( ( is_array( $options['do_importing']['users'] ) and in_array( 'import__all', $options['do_importing']['users'] ) )  ? ' checked' : '' );?>>
+			<input type="checkbox" id="spip_import_user_import__all" name="spip_import[do_importing][user][import__all]">
 			<strong><?php echo __('Import all users'); ?></strong>
 		</label>
 		<dl>
 		<?php
 		while( $results and $row = mysql_fetch_assoc( $results ) ){
+			$flags = $errors = array();
+			$classes = array('importing');
+			$user = NULL;
 			extract( $row );
-			if( is_array( $this->options['do_importing']['user'] ) and in_array( $user_login , $this->options['do_importing']['user'] ) ){
-				$cheked = ' checked';
-				echo "should be imported...";
+			if( $this->do_importing('user', $user_login ) ){
+				$flags[] = 'checked';
 			}
-			else{
-				$checked = '';
+			if( username_exists( $user_login ) ){
+				$flags[] = 'disabled';
+				$user_login = $user_login;
 			}
-			$disabled = username_exists( $user_login ) ? '' : ' disabled';
+			if( in_array( 'checked', $flags ) and !in_array( 'disabled', $flags ) ){
+				$user = wp_insert_user( $row );
+				if( is_wp_error( $user ) ){
+					$errors = $user->get_error_messages();
+					$classes = $flags;
+					$classes[] = 'error';
+				}
+			}
 			?>
 			<dt>
-				<label for="spip_import_<?php echo $user_login; ?>">
-					<input id="spip_import_user_<?php echo $user_login; ?>" type="checkbox" name="spip_import[do_importing][user][<?php echo $user_login; ?>]" title="Import <?php echo $user_login; ?>"<?php echo "{$checked}{$disabled}"; ?>>
-					<?php echo ( empty( $display_name ) ? $user_login : $display_name ) ?>
+				<label for="spip_import_<?php echo $user_login; ?>" class="<?php echo implode(' ', $classes ); ?>">
+					<input id="spip_import_user_<?php echo $user_login; ?>" type="checkbox" name="spip_import[do_importing][user][<?php echo $user_login; ?>]" title="Import <?php echo $user_login; ?>"<?php echo implode(' ', $flags); ?>>
+					<?php echo ( empty( $display_name ) ? $user_login : $display_name ); ?>
 				</label>
 			</dt>
-			<dd><strong>username: </strong><?php echo $user_login ?></dd>
-			<dd><strong>email: </strong><?php echo $user_email ?></dd>
+				<?php
+				foreach( $errors as $error_message ){
+					?>
+				<dd class="error">
+					<?php echo $error_message; ?>
+				</dd>	
+					<?php
+				}
+				?>
+			<dd><strong>username: </strong><?php echo $user_login . ( in_array( 'disabled', $flags ) ? (' <em>[' . __('User already exists on database.') . ']</em>') : '' ); ?></dd>
+			<dd><strong>email: </strong><?php echo $user_email; ?></dd>
 			<?php
 		}
 		?>
@@ -220,31 +252,114 @@ class SpipMediaImporter
 	function spip_import_tags(){
 		$results = $this->query( "SELECT id_mot AS spip_id, BINARY titre AS tag, CONCAT( BINARY descriptif, IF(  ( descriptif != '' AND texte != ''), '\n', '' ), BINARY texte ) AS description  FROM spip_mots;" );
 		?>
-		<ul>
+		<div>
+			<label for="spip_import_tag_import__all">
+				<input type="checkbox" id="spip_import_tag_import__all" name="spip_import[do_importing][tag][import__all]">
+				<strong><?php echo __('Import all tags'); ?></strong>
+			</label>
+		</div>
+		<div>
 			<?php
 		while( $results and $row = mysql_fetch_assoc( $results ) ){
 			extract( $row );
+			$flags = $errors = array();
+			$classes = array('importing');
+			$slug = sanitize_key( $tag );
+			if( $this->do_importing('tag', $slug ) ){
+				$flags[] = 'checked';
+			}
+			if( term_exists( $tag, 'post_tag' ) ){
+				$flags[] = 'disabled';
+			}
+			if( in_array( 'checked', $flags ) and !in_array( 'disabled', $flags ) ){
+				$tag = wp_insert_term( array(
+					$tag,
+					'post_tag',
+					array(
+						'description'	=>	$description
+						)
+					)
+				);
+				if( is_wp_error( $tag ) ){
+					$errors = $user->get_error_messages();
+					$classes[] = 'error';
+				}
+			}
 			?>
-			<li><strong><?php echo $tag; ?></strong> <em><?php echo $description; ?></em></li>
+			<label for="spip_import_tag_<?php echo $slug; ?>" title="[<?php echo $slug ?>] <?php echo $description; ?>">
+				<input id="spip_import_tag_<?php echo $slug; ?>" type="checkbox" name="spip_import[do_importing][tag][<?php echo $slug; ?>]" title="Import <?php echo $tag; ?>"<?php echo ( count($flags)?' ':'' ) . implode(' ', $flags); ?>>
+				<?php echo $tag; ?>,&nbsp;
+			</label>
+			<?php
+			foreach( $errors as $error_message ){
+				?>
+			<span class="error">
+				[<?php echo $error_message; ?>]&nbsp;
+			</span>	
+				<?php
+			}
+			?>
 			<?php
 		}
 			?>
-		</ul>
+		</div>
 		<?php
 	}
 
 	function spip_import_categories(){
-		$results = $this->query( "SELECT id_parent AS id_parent_category , BINARY titre AS category,CONCAT( BINARY descriptif, IF(  ( descriptif != '' AND texte != ''), '\n', '' ), BINARY texte ) AS description, (SELECT BINARY titre FROM spip_rubriques WHERE id_rubrique = id_parent_category ) AS parent_category FROM spip_rubriques;" );
+		$results = $this->query( "SELECT id_parent AS id_parent_category , BINARY titre AS category,CONCAT( BINARY descriptif, IF(  ( descriptif != '' AND texte != ''), '\n', '' ), BINARY texte ) AS description, (SELECT BINARY titre FROM spip_rubriques WHERE id_rubrique = id_parent_category ) AS parent_category FROM spip_rubriques ORDER BY category;" );
 		?>
 		<ul>
+			<li>
+				<label for="spip_import_category_import__all">
+					<input id="spip_import_category_import__all" type="checkbox" name="spip_import[do_importing][category][import__all]" title="<?php echo __("Import All"); ?>">
+					<?php echo __("Import All"); ?>
+				</label>
+			</li>
 			<?php
 		while( $results and $row = mysql_fetch_assoc( $results ) ){
 			extract( $row );
+			$flags = $errors = array();
+			$classes = array('importing');
+			$slug = sanitize_key( $category );
+			if( $this->do_importing('category', $slug ) ){
+				$flags[] = 'checked';
+			}
+			if( term_exists( $category, 'category' ) ){
+				$flags[] = 'disabled';
+			}
+			if( in_array( 'checked', $flags ) and !in_array( 'disabled', $flags ) ){
+				$category = wp_insert_term( array(
+					$category,
+					'category',
+					array(
+						'description'	=>	$description
+						)
+					)
+				);
+				if( is_wp_error( $category ) ){
+					$errors = $user->get_error_messages();
+					$classes[] = 'error';
+				}
+			}
 			?>
-			<li><strong><?php echo $category; ?></strong> <em><?php echo $description; ?></em><?php echo $id_parent_category ? " [child of <em>$parent_category</em>]" : "" ?></li>
+			<li>
+				<label for="spip_import_tag_<?php echo $slug; ?>" title="[<?php echo $slug ?>] <?php echo $description; ?>">
+					<input id="spip_import_tag_<?php echo $slug; ?>" type="checkbox" name="spip_import[do_importing][tag][<?php echo $slug; ?>]" title="Import <?php echo $tag; ?>"<?php echo ( count($flags)?' ':'' ) . implode(' ', $flags); ?>>
+					<strong><?php echo $category; ?></strong><?php if( !empty( $description ) ){ ?><em><?php echo $description; ?></em><?php } ?>
+					<?php if( !empty( $id_parent_category ) ){ ?>[child of <em><?php echo $parent_category; ?></em>]<?php } ?>
+				</label>
+			</li>
 			<?php
+			foreach( $errors as $error_message ){
+				?>
+			<span class="error">
+				[<?php echo $error_message; ?>]&nbsp;
+			</span>	
+				<?php
+			}
 		}
-			?>
+		?>
 		</ul>
 		<?php
 	}
@@ -253,6 +368,11 @@ class SpipMediaImporter
 		$results = $this->query( "SELECT id_article AS spip_id, BINARY titre AS post_title, CONCAT(BINARY surtitre, \"\n\",BINARY descriptif,\"\n\",BINARY soustitre) AS post_excerpt, CONCAT(BINARY chapo, \"\n\",BINARY texte,\"\n\",BINARY ps) AS post_content, statut AS post_status, date AS post_date, id_rubrique AS category FROM spip_articles;" );
 		?>
 		<ul>
+			<li>
+				<label for="spip_import_post_import__all">
+					<input id="spip_import_post_import__all" name="spip_import[do_importing][post][import__all]">
+				</label>
+			</li>
 			<?php
 			while( $results and $row = mysql_fetch_assoc( $results ) ){
 				extract( $row );
@@ -279,10 +399,21 @@ class SpipMediaImporter
 					<hr>
 				</li>
 				<?php
+				if( $this->do_importing( 'user', $user_login ) ){
+					;
+				}
 			}
 			?>
 		</ul>
 		<?php
+	}
+
+	function spip_import_media(){
+
+	}
+
+	function spip_sideload_media( $remote_url ){
+		return $local_url;
 	}
 
 
@@ -292,55 +423,84 @@ class SpipMediaImporter
 		.footer{
 			background-color: #DDD;
 		}
+		label.error input{
+			border: 1px #F00 solid;
+		}
+		dd.error{
+			color: #F00;
+		}
+		label.disabled{
+			text-decoration: line-through;
+		}
 		</style>
 		<script type="text/javascript">
-		jQuery(document).ready( function(){
-			jQuery(document).on('change','input[name^=spip_import]',function(e){
-				inputNameKeys = e.target.name.match(/spip_import\[do_importing\]\[(.*)\]/)[1].split('][');
-				while( inputNameKeys.length && ( currentKey = inputNameKeys.pop() ) ){
-					var fieldSet = jQuery('[name^=spip_import\\[do_importing\\]\\[' + inputNameKeys.join('\\]\\[') + '\\]]' ).not('[name^=spip_import\\[' + inputNameKeys.join('\\]\\[') + '\\]\\[' + currentKey + '\\]]' ).not('[name*=\\[import__all\\]]');
-					if( currentKey == 'import__all' ){
-						fieldSet.prop('checked', e.target.checked );
-					}
-					else if(fieldSet.length){
-						importAll = jQuery('[name=spip_import\\[do_importing\\]\\[' + inputNameKeys.join('\\]\\[') + '\\]\\[import__all\\]]')
-						importAll.prop( 'checked', fieldSet.map(function(em){return fieldSet[em].checked}).toArray().reduce(function(p,c){return p && c}) );
-					}
+		var spipImportLoad = function(){
+			var checkboxes = jQuery('input[type=checkbox][name^=spip_import\\[do_importing\\]]');
+			checkboxes.on('change', spipImportSyncCheckboxes);
+		}
+		var spipImportSyncCheckboxes = function(event){
+			var matches = event.target.name.match(/spip_import\[do_importing\]\[(\w+)\](?:\[(\w+)\])?/);
+			var checkboxClass = matches[1];
+			var checkboxID = matches[2];
+			if(checkboxID=='import__all'){
+				var classFieldSet = jQuery('input[type=checkbox][name^=spip_import\\[do_importing\\]\\['+checkboxClass+'\\]]').not(event.target);
+				if(classFieldSet.length){
+					classFieldSet.prop('checked',event.target.checked);
 				}
-			});
-		});
+			}
+			if(!checkboxID&&checkboxClass=='import__all'){
+				var classFieldSet = jQuery('input[type=checkbox][name^=spip_import\\[do_importing\\]]').not('[name*=spip_import\\[import__all\\]]');
+				if(classFieldSet.length){
+					classFieldSet.prop('checked',event.target.checked);
+				}
+			}
+			spipImportSyncClass(checkboxClass);
+			spipImportSyncAll();
+		}
+		var spipImportSyncClass = function(className){
+			var importAll = jQuery('input[type=checkbox][name=spip_import\\[do_importing\\]\\['+className+'\\]\\[import__all\\]]');
+			var importAllSet = jQuery('input[type=checkbox][name^=spip_import\\[do_importing\\]\\['+className+'\\]]').not(importAll);
+			importAll.prop('checked',importAllSet.map(function(index,element){return element.checked}).toArray().reduce(function(prev,curr){return prev&&curr}));
+		}
+		var spipImportSyncAll = function(){
+			var importAll = jQuery('input[type=checkbox][name=spip_import\\[do_importing\\]\\[import__all\\]]');
+			var importAllSet = jQuery('input[type=checkbox][name$=\\[import__all\\]]').not(importAll);
+			importAll.prop('checked',importAllSet.map(function(index,element){return element.checked}).toArray().reduce(function(prev,curr){return prev&&curr}));
+		}
+		jQuery(document).ready(spipImportLoad);
 		</script>
 		<?php
 		submit_button();
 	}
 
 	function spip_import_options_check( $input ){
-		if( !isset( $input['connection']['reset'] ) or ( !$input['connection']['reset'] ) ){
-			if( isset( $input['connection']['host'] ) and empty( $input['connection']['host'] ) ){
-				add_settings_error( 'spip_import', 'connection-host', __('Please set the server host'), 'error' );
-			}
-			if( isset( $input['connection']['username'] ) and empty( $input['connection']['username'] ) ){
-				add_settings_error( 'spip_import', 'connection-username', __('You must set a username'), 'error' );
-			}
-			if( isset( $input['connection']['password'] ) and empty( $input['connection']['password'] ) ){
-				add_settings_error( 'spip_import', 'connection-password', __('Password can not be empty'), 'error' );
-			}
-			if( isset( $input['connection']['database'] ) and empty( $input['connection']['database'] ) ){
-				add_settings_error( 'spip_import', 'connection-database', __('Please provide the name of the database to connect'), 'error' );
-			}
-			if( isset( $input['do_importing'] ) ){
-				foreach( $input['do_importing'] as $object => $list ){
-					foreach( $list as $item => $true ){
-						$input['do_importing'][ $object ][] = $item;
-					}
-				}
-			}
-			$input['connection']['reset'] = FALSE;
+		$current_options = $this->options;
+		$spip_import_options =  ! empty( $input['connection']['reset'] ) ? array( 'connection' => NULL ) : array(
+			'connection'	=>	array(
+				'host'		=>	empty( $input['connection']['host'] )		?	( empty( $current_options['connection']['host'] )		?	NULL	:	$current_options['connection']['host'] )	:	$input['connection']['host'],
+				'username'	=>	empty( $input['connection']['username'] )	?	( empty( $current_options['connection']['username'] )	?	NULL	:	$current_options['connection']['username'] )	:	$input['connection']['username'],
+				'password'	=>	empty( $input['connection']['password'] )	?	( empty( $current_options['connection']['password'] )	?	NULL	:	$current_options['connection']['password'] )	:	$input['connection']['password'],
+				'database'	=>	empty( $input['connection']['database'] )	?	( empty( $current_options['connection']['database'] )	?	NULL	:	$current_options['connection']['database'] )	:	$input['connection']['database'],
+				'reset' => FALSE,
+				)
+			)
+		;
+		if( isset( $input['connection']['host'] ) and empty( $input['connection']['host'] ) ){
+			add_settings_error( 'spip_import', 'connection-host', __('Please set the server host'), 'error' );
 		}
-		elseif( $input['connection']['reset'] ){
-			$this->reset_connection();
+		if( isset( $input['connection']['username'] ) and empty( $input['connection']['username'] ) ){
+			add_settings_error( 'spip_import', 'connection-username', __('You must set a username'), 'error' );
 		}
-		return $input;
+		if( isset( $input['connection']['password'] ) and empty( $input['connection']['password'] ) ){
+			add_settings_error( 'spip_import', 'connection-password', __('Password can not be empty'), 'error' );
+		}
+		if( isset( $input['connection']['database'] ) and empty( $input['connection']['database'] ) ){
+			add_settings_error( 'spip_import', 'connection-database', __('Please provide the name of the database to connect'), 'error' );
+		}
+		if( isset( $input['do_importing'] ) ){
+			$spip_import_options['do_importing'] = $input['do_importing'];
+		}
+		return $spip_import_options;
 	}
 
 	function spip_import_connection_host(){
@@ -549,6 +709,24 @@ class SpipMediaImporter
 
 	function media_tag( $media_tag ){
 		return $media_tag;
+	}
+
+	function do_importing( $type, $id ){
+		$do_importing = $this->options['do_importing'];
+		if( array_key_exists( 'import__all' , $do_importing ) and $do_importing['import__all'] ){
+			return TRUE;
+		}
+		if( array_key_exists( $type, $do_importing ) and is_array( $do_importing[ $type ] ) ){
+			if( array_key_exists( $id , $do_importing[ $type ] ) and $do_importing[ $type ][ $id ] ){
+				return TRUE;
+			}
+			elseif( array_key_exists( 'import__all' , $do_importing[ $type ] ) and $do_importing[ $type ][ 'import__all' ] ){
+				return TRUE;
+			}
+			else{
+				return FALSE;
+			}
+		}
 	}
 
 }
