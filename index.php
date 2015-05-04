@@ -73,7 +73,7 @@ class SpipMediaImporter
 			return FALSE;
 		}
 		else{
-			/*DEBUG*/die('erro grave: ' . var_export( compact('property') ) );
+			return NULL;
 		}
 	}
 
@@ -170,6 +170,14 @@ class SpipMediaImporter
 				'database_posts',
 				__('Import this Posts'),
 				array( $this, 'spip_import_posts' ),
+				'media',
+				'spip_import_connection_section'
+				)
+			;
+			add_settings_field(
+				'database_links',
+				__('Import this Links'),
+				array( $this, 'spip_import_links' ),
 				'media',
 				'spip_import_connection_section'
 				)
@@ -370,7 +378,8 @@ class SpipMediaImporter
 		<ul>
 			<li>
 				<label for="spip_import_post_import__all">
-					<input id="spip_import_post_import__all" name="spip_import[do_importing][post][import__all]">
+					<input type="checkbox" id="spip_import_post_import__all" name="spip_import[do_importing][post][import__all]">
+					<?php echo __("Import All"); ?>
 				</label>
 			</li>
 			<?php
@@ -379,37 +388,134 @@ class SpipMediaImporter
 				$wp_staus = array( 'publie' => 'publish', 'prepa' => 'draft', 'prop' => 'pending' );
 				$post_status = $wp_staus[ $post_status ];
 				$post_author = implode( ',' , $this->get_authors( $spip_id ) );
+				$slug = sanitize_key( $post_title );
+				$flags = $errors = array();
+				$classes = array('importing');
+				$category_chain = $this->get_category_chain( $category );
+				$tags_input = implode( ', ', $this->get_keywords( $spip_id ) );
+				if( $this->do_importing('post', $slug ) ){
+					$flags[] = 'checked';
+				}
+				if( get_page_by_title( $post_title, ARRAY_A, 'post' ) ){
+					$flags[] = 'disabled';
+				}
+				if( in_array( 'checked', $flags ) and !in_array( 'disabled', $flags ) ){
+					$post_type = 'post';
+					$post_name = $slug;
+					$wp_category = get_category_by_slug( sanitize_key( $category_chain[0] ) );
+					$post_category = array( $wp_category->term_id );
+					$insert_post_data = compact(
+						'post_title',
+						'post_name',
+						'post_excerpt',
+						'post_content',
+						'post_status',
+						'post_date',
+						'post_author',
+						'post_category',
+						'tags_input'
+					);
+					$wp_id = wp_insert_post( $insert_post_data );
+					if( is_wp_error( $wp_id ) ){
+						$errors = $user->get_error_messages();
+						$classes[] = 'error';
+					}
+				}
+				else{
+					$post_content = $this->parse_content( $post_content );
+					$post_excerpt = $this->parse_content( $post_excerpt );
+				}
 				?>
 				<li>
-					<h1 class="header"><?php echo $post_title; ?></h1>
+					<label for="spip_import_post_<?php echo $slug ?>" style="vertical-align:middle;">
+						<input type="checkbox" id="spip_import_post_<?php echo $slug ?>" name="spip_import[do_importing][post][<?php echo $slug ?>]"title="Import <?php echo $post_title; ?>"<?php echo ( count($flags)?' ':'' ) . implode(' ', $flags); ?> style="float:left">
+						<h1 class="header"><?php echo $post_title; ?></h1>
+					</label>
 					<?php if( isset( $post_excerpt ) ){
 						?>
-					<p class="content"><em><?php $this->parse_content( $post_excerpt ) ?></em></p>
+					<p class="content"><em><?php echo $post_excerpt; ?></em></p>
 						<?php
 					}
 					?>
-					<p class="content"><?php echo $this->parse_content( $post_content ) ?></p>
+					<p class="content"><?php echo $post_content; ?></p>
 					<p class="footer">
 						<em><?php echo $post_date; ?></em> 
 						<em><?php echo __( $post_status ); ?></em> 
 						<em><strong><?php echo $post_author; ?></strong></em>
 						[<?php echo $spip_id ?>]
 					</p>
-					<p><em><?php echo implode( '</em> <strong>-&gt;</strong> <em>' , $this->get_category_chain( $category ) ) ?></em></p>
+					<p>categoria: <em><?php echo 	implode( '</em> <strong>-&gt;</strong> <em>' , $category_chain ) ?></em></p>
+					<p>tags: <em><?php echo $tags_input; ?></em></p>
 					<hr>
 				</li>
 				<?php
-				if( $this->do_importing( 'user', $user_login ) ){
-					;
-				}
 			}
 			?>
 		</ul>
 		<?php
 	}
 
-	function spip_import_media(){
-
+	function spip_import_links(){
+		$spip_link_category = get_category_by_slug('spip_imported_link');
+		if( !$spip_link_category ){
+			$spip_link_category = wp_insert_term( 'SPIP Imported Link', 'category', array('slug'=>'spip_imported_link') );
+		}
+		?>
+		<ul>
+			<li>
+				<label for="spip_import_link_import__all">
+					<input type="checkbox" id="spip_import_link_import__all" name="spip_import[do_importing][link][import__all]">
+					<?php echo __("Import All") ?>
+				</label>
+			</li>
+		</ul>
+		<?php
+		$results = $this->query(
+			"SELECT id_breve AS spip_id, BINARY lien_titre AS caption, CONCAT( BINARY titre,\"\n\", BINARY texte) AS hint, lien_url AS src, statut AS post_status, date_heure AS post_date, id_rubrique AS category FROM spip_breves;"
+			);
+		while( $results and $row = mysql_fetch_assoc( $results ) ){
+			extract( $row );
+			$category_chain = $this->get_category_chain( $category );
+			$wp_category = get_category_by_slug( sanitize_key( $category_chain[0] ) );
+			$post_category = array( $wp_category->term_id, $spip_link_category->term_id );
+			$slug = sanitize_key( $caption . $spip_id );
+			$src = $this->parse_link( $src );
+			$flags = array();
+			if( $this->do_importing('link', $slug ) ){
+				$flags[] = 'checked';
+			}
+			if( get_page_by_title( $post_title, ARRAY_A, 'nav_menu_item' ) ){
+				$flags[] = 'disabled';
+			}
+			if( in_array( 'checked', $flags ) and !in_array( 'disabled', $flags ) ){
+				$menu_name = 'SPIP Import Menu';
+				if( $spip_import_menu = wp_get_nav_menu_object( $menu_name ) ){
+					$menu_id = $spip_import_menu->term_id;
+				}
+				else{
+					$menu_id = wp_create_nav_menu( $menu_name );
+				}
+				wp_update_nav_menu_item(
+					$menu_id,
+					0,
+					array(
+						'menu-item-title'	=>	$caption,
+						'menu-item-url'	=>	$src,
+						'menu-item-attr-title' => $hint,
+						'menu-item-status' => 'publish'
+						)
+					)
+				;
+			}
+			?>
+			<li>
+				<label for="spip_import_link_<?php echo 'breve_' . sanitize_key( $caption . $spip_id ) ?>">
+					<input type="checkbox" id="spip_import_link_<?php echo 'breve_' .  sanitize_key( $spip_id ) ?>" name="spip_import[do_importing][link][<?php echo 'breve_' .  sanitize_key( $spip_id ) ?>]" title="Import <?php echo $caption; ?>"<?php echo ( count($flags)?' ':'' ) . implode(' ', $flags); ?> style="float:left">
+					<?php echo $caption ?> -- <em><?php echo substr( $hint , 0, 65) ?></em> <?php echo "[$src]"; ?>
+				</label>
+			</li>
+			<?php
+		}
 	}
 
 	function spip_sideload_media( $remote_url ){
@@ -583,9 +689,6 @@ class SpipMediaImporter
 	}
 
 	function parse_content( $content ){
-#		$content = preg_replace( '/\{{6}(?P<content>.*?)\}{6}/m', "<h6>$1</h6>", $content );
-#		$content = preg_replace( '/\{{5}(?P<content>.*?)\}{5}/m', "<h5>$1</h5>", $content );
-#		$content = preg_replace( '/\{{4}(?P<content>.*?)\}{4}/m', "<h4>$1</h4>", $content );
 		$content = preg_replace( '/\{{3}(?P<content>.*?)\}{3}/m', "<h3>$1</h3>", $content );//subtitles
 		$content = preg_replace( '/\{{2}(?P<content>.*?)\}{2}/m', "<strong>$1</strong>", $content );
 		$content = preg_replace( '/\{+(?P<content>[^\}]*?)\}+/m', "<em>$1</em>", $content );
@@ -644,16 +747,96 @@ class SpipMediaImporter
 		return $table;
 	}
 
-	function parse_media( $media_id ){
-		$results = $this->query("SELECT fichier AS file, largeur AS width, hauteur AS height, titre AS title, date FROM spip_documents WHERE id_document = $media_id");
-		$media = mysql_fetch_assoc( $results );
-		$media['file'] =   $this->imported_setup['adresse_site'] . '/' . $this->imported_setup['dir_img'] . '/' .  $media['file'];
-		return $media;
+	function parse_media( $media_id, $field = FALSE ){
+		if( !is_numeric( $media_id ) ){
+			return $media_id;
+		}
+		if( !isset( $this->__categories_table_cache__ ) ){
+			$results = $this->query("SELECT id_document AS media_id, fichier AS file, largeur AS width, hauteur AS height, BINARY titre AS title, date FROM spip_documents;");
+			while( $results and $row = mysql_fetch_assoc( $results ) ){
+				$row['filename'] = $row['file'];
+				$row['url'] =  $this->imported_setup['adresse_site'] . '/' . $this->imported_setup['dir_img'] . '/' .  $row['filename'];
+				$row['original_url'] = $row['url'];
+				if( $this->do_importing( 'media', $media_id ) ){
+					$tmp = download_url( $row['original_url'] );
+					if( is_wp_error( $tmp ) ){
+						@unlink( $tmp );
+						return $tmp;
+					}
+					$file = array(
+						'name'	=>	basename( $row['original_url'] ),
+						'tmp_name'	=>	$tmp
+						)
+					;
+					$handle = media_handle_sideload( $file, 0 );
+					if( is_wp_error( $handle ) ){
+						@unlink( $file['tmp_name']);
+						return $handle;
+					}
+					$row['url'] = wp_get_attachment_url( $handle );
+				}
+				$row['file'] = $row['url'];
+				$this->__categories_table_cache__[ $row['media_id'] ] = $row;
+			}
+		}
+		$media = ( array_key_exists( $media_id, $this->__categories_table_cache__) ) ? $this->__categories_table_cache__[ $media_id ] : array();
+		if( $field and array_key_exists( $field, $media ) ){
+			$media = $media[ $field ];
+		}
+		return empty( $media ) ? FALSE : $media;
+	}
+
+	function parse_link( $id, $type = 'article' ){
+		global $wpdb;
+		if( $type == 'post' ){
+			$type = 'article';
+		}
+		if( $type == 'media' ){
+			$type = 'document';
+		}
+		if( $type == 'document' ){
+			return $this->parse_media( $id, 'src' );
+		}
+		if( $type == 'article' ){
+			$spip_article = $this->sql("SELECT id_article AS spip_id, BINARY titre as title FROM spip_articles", "spip_id", $id);
+			if( empty( $spip_article['title'] ) ){
+				return $id;
+			}
+			$wp_post = get_page_by_title( $spip_article['title'], 'OBJECT', 'post' );
+			if( empty( $wp_post ) ){
+				return $this->imported_setup['adresse_site'] . '/article' .  $spip_article['spip_id'];
+			}
+			return get_permalink( $wp_post->ID );
+		}
 	}
 
 	function parse_filter( $filters ){
 		$filters = explode('|', $filters );
 		return 'class="' . implode( ' ' , $filters ) . '"';
+	}
+
+	function sql( $SQL, $index = NULL, $match = FALSE ){
+		if( !is_string( $SQL ) ){
+			return NULL;
+		}
+		if( isset( $this->{'__'. sanitize_key( md5( $SQL ) ) .'_table_cache__'} ) ){
+			$dataset = $this->{'__'. sanitize_key( md5( $SQL ) ) .'_table_cache__'};
+		}
+		else{
+			$results = mysql_query( $SQL );
+			while( $results and $row = mysql_fetch_assoc( $results ) ){
+				if( empty( $index ) ){
+					$dataset[] = $row;
+				}
+				else{
+					$dataset[ $row[ $index ] ] = $row;
+				}
+			}
+		}
+		if( $match ){
+			return $dataset[ $match ];
+		}
+		return $dataset;
 	}
 
 	function get_authors( $id_article ){
@@ -667,25 +850,40 @@ class SpipMediaImporter
 	}
 
 	function get_keywords( $id_article = NULL ){
-
+		$results = $this->query("SELECT BINARY titre AS tag FROM spip_mots_articles,spip_mots WHERE id_article=$id_article AND spip_mots_articles.id_mot=spip_mots.id_mot;");
+		$tags = array();
+		while( $results and $row = mysql_fetch_assoc( $results ) ){
+			$tags[] = $row['tag'];
+		}
+		return $tags;
 	}
 
-	function get_categories_table(){
-		$results = $this->query("SELECT id_rubrique AS spip_id, BINARY titre AS category, (SELECT BINARY titre FROM spip_rubriques AS spip_parent_rubriques WHERE spip_parent_rubriques.id_rubrique = spip_rubriques.id_parent) AS parent FROM spip_rubriques;");
-		$categories = array();
-		while( $row = mysql_fetch_assoc( $results ) ){
-			$categories[ $row['spip_id'] ] = array( 'category' => $row['category'], 'parent' => $row['parent'] );
+	function get_categories_table( $field = NULL, $value = NULL ){
+		if( !is_array( $this->__categories_table_cache__ ) ){
+			$this->__categories_table_cache__ = array();
+			$results = $this->query("SELECT id_rubrique AS spip_id, BINARY titre AS category, (SELECT BINARY titre FROM spip_rubriques AS spip_parent_rubriques WHERE spip_parent_rubriques.id_rubrique = spip_rubriques.id_parent) AS parent FROM spip_rubriques;");
+			while( $row = mysql_fetch_assoc( $results ) ){
+				$this->__categories_table_cache__[ $row['spip_id'] ] = $row;
+			}
 		}
-		return $categores;
+		if( isset( $field ) ){
+			foreach( $this->__categories_table_cache__ as $index => $row ){
+				if( isset( $row[ $field ] ) and $row[ $field ] == $value ){
+					return $row;
+				}
+			}
+			return FALSE;
+		}
+		return $this->__categories_table_cache__;
 	}
 
 	function get_category_chain( $id_category ){
-		$categories_table = $this->get_categories_table();
-		$category = isset( $categories_table[ $id_category ] ) ? $categories_table[ $id_category ] : array();
-		$category_chain = array( $category['category'] );
-		while( array_key_exists( 'parent' , $category ) ){
-			$category = $category['parent'];
-			$category_chain[] = $category['category'];
+		$field = 'spip_id';
+		$value = $id_category;
+		while( $current = $this->get_categories_table( $field, $value ) ){
+			$field = 'category';
+			$value = $current['parent'];
+			$category_chain[] = $current['category'];
 		}
 		return $category_chain;
 	}
