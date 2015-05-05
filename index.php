@@ -143,6 +143,14 @@ class SpipMediaImporter
 				)
 			;
 			add_settings_field(
+				'import_media',
+				__('Import Media'),
+				array( $this, 'spip_import_media' ),
+				'media',
+				'spip_import_connection_section'
+				)
+			;
+			add_settings_field(
 				'database_users',
 				__('Import this users'),
 				array( $this, 'spip_import_users' ),
@@ -280,18 +288,12 @@ class SpipMediaImporter
 				$flags[] = 'disabled';
 			}
 			if( in_array( 'checked', $flags ) and !in_array( 'disabled', $flags ) ){
-				$tag = wp_insert_term( array(
-					$tag,
-					'post_tag',
-					array(
-						'description'	=>	$description
-						)
-					)
-				);
-				if( is_wp_error( $tag ) ){
-					$errors = $user->get_error_messages();
+				$wp_tag = wp_insert_term( $tag, 'post_tag', array( 'description'	=>	$description ) );
+				if( is_wp_error( $wp_tag ) ){
+					$errors = $wp_tag->get_error_messages();
 					$classes[] = 'error';
 				}
+
 			}
 			?>
 			<label for="spip_import_tag_<?php echo $slug; ?>" title="[<?php echo $slug ?>] <?php echo $description; ?>">
@@ -337,15 +339,16 @@ class SpipMediaImporter
 				$flags[] = 'disabled';
 			}
 			if( in_array( 'checked', $flags ) and !in_array( 'disabled', $flags ) ){
-				$category = wp_insert_term( array(
+				$wp_category = wp_insert_term(
 					$category,
 					'category',
 					array(
+						'slug'			=>	sanitize_key( $category ),
 						'description'	=>	$description
 						)
 					)
-				);
-				if( is_wp_error( $category ) ){
+				;
+				if( is_wp_error( $wp_category ) ){
 					$errors = $user->get_error_messages();
 					$classes[] = 'error';
 				}
@@ -402,8 +405,10 @@ class SpipMediaImporter
 				if( in_array( 'checked', $flags ) and !in_array( 'disabled', $flags ) ){
 					$post_type = 'post';
 					$post_name = $slug;
+					$wp_category_id = get_cat_ID( $category_chain[0] );
 					$wp_category = get_category_by_slug( sanitize_key( $category_chain[0] ) );
-					$post_category = array( $wp_category->term_id );
+					$post_category = array( $wp_category_id );
+/*DEBUG*/ echo var_export( compact('post_category') );
 					$insert_post_data = compact(
 						'post_title',
 						'post_name',
@@ -516,6 +521,19 @@ class SpipMediaImporter
 			</li>
 			<?php
 		}
+	}
+
+	function spip_import_media(){
+		if( $this->do_importing('media') ){
+			$mediaset = $this->parse_media();
+			die(var_export( compact('mediaset')));
+		}
+	?>
+		<label>
+			<input type="checkbox" id="spip_import_media_import__all" name="spip_import[do_importing][media][import__all]" checked>
+			<?php echo __('Import all media too'); ?>
+		</label>
+	<?php
 	}
 
 	function spip_sideload_media( $remote_url ){
@@ -747,7 +765,7 @@ class SpipMediaImporter
 		return $table;
 	}
 
-	function parse_media( $media_id, $field = FALSE ){
+	function parse_media( $media_id = 0, $field = FALSE ){
 		if( !is_numeric( $media_id ) ){
 			return $media_id;
 		}
@@ -755,10 +773,11 @@ class SpipMediaImporter
 			$results = $this->query("SELECT id_document AS media_id, fichier AS file, largeur AS width, hauteur AS height, BINARY titre AS title, date FROM spip_documents;");
 			while( $results and $row = mysql_fetch_assoc( $results ) ){
 				$row['filename'] = $row['file'];
-				$row['url'] =  $this->imported_setup['adresse_site'] . '/' . $this->imported_setup['dir_img'] . '/' .  $row['filename'];
+				$row['url'] =  $this->imported_setup['adresse_site'] . '/' . trim( $this->imported_setup['dir_img'], '/' ). '/' . trim( $row['filename'], '/' );
 				$row['original_url'] = $row['url'];
 				if( $this->do_importing( 'media', $media_id ) ){
-					$tmp = download_url( $row['original_url'] );
+					$tmp = download_url( $x = $row['original_url'] );
+/*debug*/					die('#'.var_export(compact('media_id','row','tmp','x')));					
 					if( is_wp_error( $tmp ) ){
 						@unlink( $tmp );
 						return $tmp;
@@ -909,8 +928,8 @@ class SpipMediaImporter
 		return $media_tag;
 	}
 
-	function do_importing( $type, $id ){
-		$do_importing = $this->options['do_importing'];
+	function do_importing( $type, $id = 'import__all' ){
+		$do_importing = empty( $this->options['do_importing'] ) ? array() : $this->options['do_importing'];
 		if( array_key_exists( 'import__all' , $do_importing ) and $do_importing['import__all'] ){
 			return TRUE;
 		}
